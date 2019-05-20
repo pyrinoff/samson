@@ -300,7 +300,7 @@ class zSQL implements zLogInterface
 }
 
 
-function recreateTablesAndCategories()
+function recreateTablesAndCategories($codepage='utf8')
 {
     $db = new zSQL();
     $dbname = 'test_samson';
@@ -310,7 +310,7 @@ function recreateTablesAndCategories()
     } catch (Exception $e) {
     }
     $db->exec("CREATE DATABASE ?;", $dbname);
-    $db->exec("ALTER DATABASE ? CHARACTER SET utf8;", $dbname);
+    $db->exec("ALTER DATABASE ? CHARACTER SET ?;", $dbname, $codepage);
     $db->exec("USE ?;", $dbname);
     $db->prepare("CREATE TABLE a_product (
         prod_id INT NOT NULL AUTO_INCREMENT,
@@ -405,8 +405,8 @@ class zXmlArray implements zLogInterface
         if (!is_array($arr)) throw new Exception(__FUNCTION__ . ' !array');
         $result = NULL;
         foreach ($arr as $k => $v) {
-            foreach($v as $subval)
-            $result[$k][] = $subval['value'];
+            foreach ($v as $subval)
+                $result[$k][] = $subval['value'];
         }
         return $result;
     }
@@ -431,18 +431,23 @@ class zXmlArray implements zLogInterface
     }
 
 
-    public static function getSpecificKeyPlusVal(array $arr, $key)
+    public static function getSpecificKeyPlusVal(array $arr, $key, $strict=true)
     {
         if (!is_array($arr)) throw new Exception(__FUNCTION__ . ' !array');
         if (!isset($arr[$key])) throw new Exception('Invalid key: ' . $key);
+        if(count($arr)>1) {
+            if ($strict) throw new Exception('Wrong element in Categories tag of XML');
+            else self::log('!!!!!Wrong element in Categories tag of XML!!!!!');
+        }
         $result = NULL;
         foreach ($arr[$key] as $subarr) {
             if (!isset($subarr['value'])) {
-                var_dump($subarr);
+                //var_dump($subarr);
                 throw new Exception('Invalid key: ' . $key);
             }
             $result[] = $subarr['value'];
         }
+        //var_dump($result);
         return $result;
     }
 }
@@ -571,40 +576,7 @@ class Product implements zLogInterface
                     ( SELECT cat_code FROM a_prodcat WHERE prod_id=? )
                 ;", $id);
         foreach ($a_category[0] as $cat) $this->setCategory($cat[0], $cat[1]);
-
         return;
-
-        /*
-        //Название/код
-
-        $xml .= $tab . '<Товар Код="' . $product['Код'] . '" Название="' . $product['Название'] . '">' . "\r\n";
-        //Цены
-
-        //var_dump($a_price);
-        foreach ($a_price as $price) {
-            $xml .= $tab . $tab . '<Цена Тип="' . $price[0] . '">' . $price[1] . '</Цена>' . "\r\n";
-        }
-        //Свойства
-
-        //var_dump($a_property);
-        $xml .= $tab . $tab . "<Свойства>\r\n";
-        foreach ($a_property as $prop) {
-            $xml .= $tab . $tab . $tab . '<' . $prop[0] . '>' . $prop[1] . '</' . $prop[0] . '>' . "\r\n";
-        }
-        $xml .= $tab . $tab . "</Свойства>\r\n";
-        //Разделы
-
-        //var_dump($a_category);
-        $xml .= $tab . $tab . "<Разделы>\r\n";
-        foreach ($a_category as $cat) {
-            $xml .= $tab . $tab . $tab . '<Раздел>' . $cat[0] . '</Раздел>' . "\r\n";
-        }
-        $xml .= $tab . $tab . "</Разделы>\r\n";
-
-
-        $xml .= "    </Товар>\r\n";
-        */
-
 
     }
 
@@ -633,29 +605,29 @@ class Product implements zLogInterface
         $this->categories[] = ['name' => $catname, 'code' => $catcode];
     }
 
-    public function getProductXML(DOMDocument $dom) : DOMElement
+    public function getProductXML(DOMDocument $dom): DOMElement
     {
-        $product=$dom->createElement("Товар");
+        $product = $dom->createElement("Товар");
         $product->setAttribute('Код', $this->getCode());
         $product->setAttribute('Название', $this->getName());
 
-        foreach($this->getPrices() as $price) {
-            $dom_price=$dom->createElement('Цена', $price['val']);
+        foreach ($this->getPrices() as $price) {
+            $dom_price = $dom->createElement('Цена', $price['val']);
             $dom_price->setAttribute('Тип', $price['name']);
             $product->appendChild($dom_price);
         }
 
-        $properties=$dom->createElement("Свойства");
+        $properties = $dom->createElement("Свойства");
         $product->appendChild($properties);
-        foreach($this->getProperties() as $prop) {
-            $dom_prop=$dom->createElement($prop['name'], $prop['val']);
+        foreach ($this->getProperties() as $prop) {
+            $dom_prop = $dom->createElement($prop['name'], $prop['val']);
             $properties->appendChild($dom_prop);
         }
 
-        $categories=$dom->createElement("Разделы");
+        $categories = $dom->createElement("Разделы");
         $product->appendChild($categories);
-        foreach($this->getCategories() as $cat) {
-            $dom_cat=$dom->createElement('Раздел', $cat['name']);
+        foreach ($this->getCategories() as $cat) {
+            $dom_cat = $dom->createElement('Раздел', $cat['name']);
             $categories->appendChild($dom_cat);
         }
 
@@ -664,13 +636,48 @@ class Product implements zLogInterface
 }
 
 
+function getAllSubcategories(zSQL $link, $b): array
+{
+    /*$result = $link->query("SELECT cat_code FROM
+    (SELECT * FROM a_category ORDER BY cat_parent, cat_code) category_sorted,
+    (SELECT @pv :='?') INITIALISATION
+    WHERE find_in_set(cat_parent, @pv)
+    ;", $b); //AND length (@pv :=concat (@pv, ',', cat_parent))
+    $cat_codes[] = (int)$b;
+    foreach ($result[0] as $row) $cat_codes[] = (int)$row[0];
+    return $cat_codes;
+    */
+    $result = $link->query("SELECT cat_code, cat_parent FROM a_category");
+    $cats=NULL;
+
+
+    $recursiveParent = function (array $elements, $parentID) use (&$recursiveParent) {
+        $result=array();
+
+        foreach($elements as $element) {
+            if($element['1']==$parentID) { //если это дочерняя категория
+                $result[]=$element['0']; //добавляем ее в результатирующий массив
+                $children=$recursiveParent($elements, $element['0']); //запускаем рекурсивно функцию с полученной категорией
+                if(count($children)) { //если не пустой
+                    foreach($children as $sub) $result[]=$sub['0']; //добавляем полученное из рекурсивной функции в результатирующий массив
+                }
+            }
+        }
+        return $result;
+    };
+
+    $subcats=$recursiveParent($result[0], $b);
+    $subcats[]=$b;
+    return $subcats;
+}
+
 function importXml($a)
 {
     $data = zXmlArray::file_to_array($a);
 
     if (!is_array($data['Товары']['Товар'])) throw new Exception('Wrong XML structure (Tovari empty)');
 
-    $link = new zSQL('localhost', 'root', '', 'test_samson');
+    $link = new zSQL('localhost', 'root', '', 'test_samson', 'utf8');
 
     foreach ($data['Товары']['Товар'] as $k => $prod) {
         $Product = new Product();
@@ -679,44 +686,29 @@ function importXml($a)
         $Product->setName($prop1['Название']);
         $Product->setCode($prop1['Код']);
 
+        if(!isset($prod['Цена'][0])) throw new Exception ('Cant parce prices for product code: '.$Product->getCode());
         $price = zXmlArray::getSpecificAttributePlusValue($prod['Цена'], 'Тип');
         foreach ($price as $pricename => $pricevalue) $Product->setPrice($pricename, $pricevalue);
 
+        if(!isset($prod['Свойства'][0])) throw new Exception ('Cant parse properties for product code: '.$Product->getCode());
         $properties = zXmlArray::getAssocKeyValue($prod['Свойства'][0]);
         foreach ($properties as $propname => $subprop) {
             foreach ($subprop as $propvalue) {
                 $Product->setProperty($propname, $propvalue);
-                echo $propname.' '.$propvalue;
             }
         }
 
-        $categories = zXmlArray::getSpecificKeyPlusVal($prod['Разделы'][0], 'Раздел');
+        if(!isset($prod['Разделы'][0])) throw new Exception ('Cant parce categories for product code: '.$Product->getCode());
+        $categories = zXmlArray::getSpecificKeyPlusVal($prod['Разделы'][0], 'Раздел', false);
         foreach ($categories as $catname) $Product->setCategory($catname, NULL);
-
         $Product->insertData($link);
     }
 }
 
-
-function getAllSubcategories(zSQL $link, $b)
-{
-    $result = $link->query("SELECT cat_code FROM
-    (SELECT * FROM a_category ORDER BY cat_parent, cat_code) category_sorted,
-    (SELECT @pv :='?') INITIALISATION
-    WHERE find_in_set(cat_parent, @pv)
-    ;", $b); //AND length (@pv :=concat (@pv, ',', cat_parent))
-
-    $cat_codes[] = (int)$b;
-    foreach ($result[0] as $row) $cat_codes[] = (int)$row[0];
-    return $cat_codes;
-}
-
-
 function exportXml($a, $b)
 {
-
     if (!is_int($b) || $b < 0) throw new Exception("B is not numeric or not positive");
-    $link = new zSQL('localhost', 'root', '', 'test_samson');
+    $link = new zSQL('localhost', 'root', '', 'test_samson', 'utf8');
 
     //получаем все субкатегории, входящие в категорию $b
     $cat_codes = getAllSubcategories($link, $b);
@@ -726,7 +718,6 @@ function exportXml($a, $b)
     $result2 = $link->query("SELECT prod_id FROM a_prodcat WHERE cat_code IN (?);", $cats);
     $prod_ids = NULL;
     foreach ($result2[0] as $row) $prod_ids[] = $row[0];
-
 
     $dom = new DOMDocument('1.0', 'utf-8');
     $dom->formatOutput = true;
@@ -742,16 +733,14 @@ function exportXml($a, $b)
     }
 
     $xml = $dom->saveXML();
-    echo $xml;
     if (!file_put_contents($a, $xml)) throw new Exception("Cant write XML to file '$a'");
+    zSQL::log('Write XML to '.$a.' successful');
 }
 
 //var_dump(convertString('testANDtestANDtest', 'test'));
 //$someA = [['a' => 3, 'b' => 3], ['a' => 1, 'b' => 1], ['a' => 2, 'b' => 2]];
 //var_dump(mySortForKey($someA, 'b'));
 
-
 //recreateTablesAndCategories();
-
-importXml('2.xml');
-exportXml('3.xml', 101);
+//importXml('2.xml');
+//exportXml('3.xml', 101);
