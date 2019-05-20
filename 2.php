@@ -1,5 +1,4 @@
 <?php
-$SHOW_SQL_QUERRIES = false;
 
 function convertString(String $a, String $b)
 {
