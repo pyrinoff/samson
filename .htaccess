@@ -1,0 +1,12 @@
+#block php
+php_flag engine 0
+RemoveHandler .phtml .php .php2 .php3 .php4 .php5 .php7 .phps
+AddType text/plain .phtml .php .php2 .php3 .php4 .php5 .php6 .php7 .phps
+
+#rewrite jpg paths
+RewriteEngine On
+RewriteBase /
+RewriteRule "^([a-zA-Z]{1})([0-9]{2})\.jpg$" "/goods/$1/$2.jpg" [L]
+
+#handle404
+ErrorDocument 404 /404.html
